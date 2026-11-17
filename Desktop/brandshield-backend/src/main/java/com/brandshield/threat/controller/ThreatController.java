@@ -1,5 +1,7 @@
 package com.brandshield.threat.controller;
 
+import com.brandshield.intelligence.DomainIntelligenceDto;
+import com.brandshield.intelligence.DomainIntelligenceService;
 import com.brandshield.security.CustomUserDetails;
 import com.brandshield.threat.dto.AnalyzeTargetRequest;
 import com.brandshield.threat.dto.ThreatResponse;
@@ -25,9 +27,24 @@ import java.util.UUID;
 public class ThreatController {
 
     private final ThreatDetectionService threatDetectionService;
+    private final DomainIntelligenceService domainIntelligenceService;
 
-    public ThreatController(ThreatDetectionService threatDetectionService) {
+    public ThreatController(
+            ThreatDetectionService threatDetectionService,
+            DomainIntelligenceService domainIntelligenceService) {
         this.threatDetectionService = threatDetectionService;
+        this.domainIntelligenceService = domainIntelligenceService;
+    }
+
+    @GetMapping("/intelligence")
+    public DomainIntelligenceDto getDomainIntelligence(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @RequestParam UUID brandId,
+            @RequestParam String domain) {
+
+        return domainIntelligenceService.getFullIntelligence(
+                userDetails.getUser().getId(), brandId, domain
+        );
     }
 
     @PostMapping("/scan/{brandId}")

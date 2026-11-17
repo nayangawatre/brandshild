@@ -173,5 +173,15 @@ class ThreatControllerTest {
                 .andExpect(jsonPath("$.criticalCount").value(org.hamcrest.Matchers.greaterThan(0)))
                 .andExpect(jsonPath("$.confirmedCount").value(1))
                 .andExpect(jsonPath("$.averageThreatScore").value(org.hamcrest.Matchers.greaterThan(0.0)));
+
+        // 9. Query Domain Intelligence (DNS, RDAP, Jsoup, Playwright, CT)
+        mockMvc.perform(get("/api/v1/threats/intelligence?brandId=" + brand1Id + "&domain=apple-security.xyz")
+                        .header("Authorization", "Bearer " + user1Token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.domain").value("apple-security.xyz"))
+                .andExpect(jsonPath("$.dns").exists())
+                .andExpect(jsonPath("$.rdap").exists())
+                .andExpect(jsonPath("$.contentAnalysis").exists())
+                .andExpect(jsonPath("$.rendering").exists());
     }
 }

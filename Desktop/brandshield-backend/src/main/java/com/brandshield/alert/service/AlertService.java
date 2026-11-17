@@ -25,9 +25,11 @@ public class AlertService {
     private static final Logger log = LoggerFactory.getLogger(AlertService.class);
 
     private final AlertRepository alertRepository;
+    private final EmailNotificationService emailNotificationService;
 
-    public AlertService(AlertRepository alertRepository) {
+    public AlertService(AlertRepository alertRepository, EmailNotificationService emailNotificationService) {
         this.alertRepository = alertRepository;
+        this.emailNotificationService = emailNotificationService;
     }
 
     @Transactional
@@ -64,6 +66,10 @@ public class AlertService {
 
         Alert saved = alertRepository.save(alert);
         log.info("Dispatched {} alert ID={} for user={}", threat.getSeverity(), saved.getId(), threat.getBrand().getUser().getEmail());
+
+        // Step 5 & 6: Trigger asynchronous email delivery worker
+        emailNotificationService.sendThreatAlertEmail(threat, saved);
+
         return saved;
     }
 
