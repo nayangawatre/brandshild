@@ -184,4 +184,43 @@ class ThreatControllerTest {
                 .andExpect(jsonPath("$.contentAnalysis").exists())
                 .andExpect(jsonPath("$.rendering").exists());
     }
+
+    @Test
+    void testHotelThreeLeavesFakeWebsiteDetection() throws Exception {
+        // Create "Hotel Three Leaves" brand
+        CreateBrandRequest hotelBrand = new CreateBrandRequest(
+                "Hotel Three Leaves",
+                "Hospitality",
+                "https://hotelthreeleaves.com",
+                "Luxury boutique hotel in Maharashtra",
+                null,
+                Set.of("hotel", "three", "leaves"),
+                Set.of("hotelthreeleaves.com")
+        );
+
+        MvcResult brandRes = mockMvc.perform(post("/api/v1/brands")
+                        .header("Authorization", "Bearer " + user1Token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(hotelBrand)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String hotelBrandId = objectMapper.readTree(brandRes.getResponse().getContentAsString()).get("id").asText();
+
+        // Analyze suspected fake website: "threeleaveshotell.co.in"
+        AnalyzeTargetRequest fakeSiteReq = new AnalyzeTargetRequest(
+                UUID.fromString(hotelBrandId),
+                "threeleaveshotell.co.in"
+        );
+
+        mockMvc.perform(post("/api/v1/threats/analyze")
+                        .header("Authorization", "Bearer " + user1Token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(fakeSiteReq)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.targetValue").value("threeleaveshotell.co.in"))
+                .andExpect(jsonPath("$.severity").value("CRITICAL"))
+                .andExpect(jsonPath("$.threatScore").value(org.hamcrest.Matchers.greaterThanOrEqualTo(75)))
+                .andExpect(jsonPath("$.details").value(org.hamcrest.Matchers.containsString("Character duplication")));
+    }
 }

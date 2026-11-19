@@ -70,11 +70,21 @@ public class ThreatController {
             @PathVariable UUID brandId,
             @RequestParam(required = false) ThreatStatus status,
             @RequestParam(required = false) Severity severity,
+            @RequestParam(required = false, defaultValue = "true") boolean activeOnly,
             @PageableDefault(size = 20, sort = "threatScore", direction = Sort.Direction.DESC) Pageable pageable) {
 
         return threatDetectionService.getThreatsByBrand(
-                userDetails.getUser().getId(), brandId, status, severity, pageable
+                userDetails.getUser().getId(), brandId, status, severity, activeOnly, pageable
         );
+    }
+
+    @DeleteMapping("/brand/{brandId}/inactive")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void purgeInactiveThreats(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable UUID brandId) {
+
+        threatDetectionService.purgeInactiveThreats(userDetails.getUser().getId(), brandId);
     }
 
     @GetMapping("/{id}")

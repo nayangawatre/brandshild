@@ -169,6 +169,7 @@ public class AdminService {
                         threat.getSource(),
                         threat.getThreatScore(),
                         threat.getDetails(),
+                        threat.isLive(),
                         threat.getDetectedAt(),
                         threat.getUpdatedAt()
                 ));

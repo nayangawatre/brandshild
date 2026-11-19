@@ -4,6 +4,8 @@ import com.brandshield.alert.service.AlertService;
 import com.brandshield.brand.entity.Brand;
 import com.brandshield.brand.repository.BrandRepository;
 import com.brandshield.exception.ResourceNotFoundException;
+import com.brandshield.intelligence.CertificateTransparencyService;
+import com.brandshield.intelligence.DnsVerificationService;
 import com.brandshield.threat.dto.AnalyzeTargetRequest;
 import com.brandshield.threat.dto.ThreatResponse;
 import com.brandshield.threat.dto.ThreatStatsResponse;
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ThreatDetectionService {
@@ -28,22 +31,29 @@ public class ThreatDetectionService {
     private final TyposquattingDetector typosquattingDetector;
     private final ThreatScoringService threatScoringService;
     private final AlertService alertService;
+    private final CertificateTransparencyService certificateTransparencyService;
+    private final DnsVerificationService dnsVerificationService;
 
     public ThreatDetectionService(
             ThreatRepository threatRepository,
             BrandRepository brandRepository,
             TyposquattingDetector typosquattingDetector,
             ThreatScoringService threatScoringService,
-            AlertService alertService) {
+            AlertService alertService,
+            CertificateTransparencyService certificateTransparencyService,
+            DnsVerificationService dnsVerificationService) {
         this.threatRepository = threatRepository;
         this.brandRepository = brandRepository;
         this.typosquattingDetector = typosquattingDetector;
         this.threatScoringService = threatScoringService;
         this.alertService = alertService;
+        this.certificateTransparencyService = certificateTransparencyService;
+        this.dnsVerificationService = dnsVerificationService;
     }
 
     /**
      * Executes an automated scan across brand keywords and lookalike domain variations.
+     * Verifies DNS to exclusively discover, track, and alert on active websites.
      */
     @Transactional
     public List<ThreatResponse> scanBrand(UUID userId, UUID brandId) {
@@ -51,19 +61,45 @@ public class ThreatDetectionService {
 
         Set<String> targetsToEvaluate = new HashSet<>();
 
-        // Generate lookalike variations for all official domains
+        // 1. Generate lookalike, word-reversal, and compound variations for all official domains
         for (String officialDomain : brand.getOfficialDomains()) {
-            targetsToEvaluate.addAll(typosquattingDetector.generateVariations(officialDomain));
+            targetsToEvaluate.addAll(typosquattingDetector.generateVariations(officialDomain, brand.getKeywords()));
         }
+
+        // 2. Discover live registered domains via Certificate Transparency logs
+        try {
+            var ctEntries = certificateTransparencyService.searchCertificates(brand.getName(), brand.getOfficialDomains());
+            for (var entry : ctEntries) {
+                targetsToEvaluate.add(entry.domain());
+            }
+        } catch (Exception ignored) {}
+
+        // 3. Concurrently verify DNS so ONLY active, registered websites on the internet are processed
+        Map<String, DnsVerificationService.DnsResult> activeDnsMap = new ConcurrentHashMap<>();
+        targetsToEvaluate.parallelStream().forEach(target -> {
+            try {
+                var dns = dnsVerificationService.verifyDomain(target);
+                if (dns.isResolving()) {
+                    activeDnsMap.put(target, dns);
+                }
+            } catch (Exception ignored) {}
+        });
 
         List<Threat> savedThreats = new ArrayList<>();
 
-        for (String target : targetsToEvaluate) {
+        for (Map.Entry<String, DnsVerificationService.DnsResult> entry : activeDnsMap.entrySet()) {
+            String target = entry.getKey();
+            DnsVerificationService.DnsResult dns = entry.getValue();
             ThreatScoringService.AnalysisResult analysis = threatScoringService.analyzeTarget(target, brand);
 
             // Save threats meeting a medium/high threshold
-            if (analysis.score() >= 35 && !threatRepository.existsByBrandIdAndTargetValue(brandId, target)) {
-                Threat threat = new Threat();
+            if (analysis.score() >= 35) {
+                Threat threat = threatRepository.findByBrandId(brandId, Pageable.unpaged())
+                        .stream()
+                        .filter(t -> t.getTargetValue().equalsIgnoreCase(target))
+                        .findFirst()
+                        .orElseGet(Threat::new);
+
                 threat.setBrand(brand);
                 threat.setTargetValue(target);
                 threat.setSource("AUTOMATED_TYPOSQUAT_SCANNER");
@@ -71,7 +107,8 @@ public class ThreatDetectionService {
                 threat.setSeverity(analysis.severity());
                 threat.setThreatType(analysis.threatType());
                 threat.setStatus(ThreatStatus.DETECTED);
-                threat.setDetails(analysis.explanation());
+                threat.setLive(true);
+                threat.setDetails("Active Host: " + String.join(", ", dns.ipAddresses()) + " | " + analysis.explanation());
 
                 Threat saved = threatRepository.save(threat);
                 savedThreats.add(saved);
@@ -97,6 +134,7 @@ public class ThreatDetectionService {
         String target = request.targetValue().trim();
 
         ThreatScoringService.AnalysisResult analysis = threatScoringService.analyzeTarget(target, brand);
+        DnsVerificationService.DnsResult dnsResult = dnsVerificationService.verifyDomain(target);
 
         // Find existing or create new threat record
         Threat threat = threatRepository.findByBrandId(brand.getId(), Pageable.unpaged())
@@ -115,7 +153,12 @@ public class ThreatDetectionService {
         threat.setThreatScore(analysis.score());
         threat.setSeverity(analysis.severity());
         threat.setThreatType(analysis.threatType());
-        threat.setDetails(analysis.explanation());
+        threat.setLive(dnsResult.isResolving());
+        
+        String dnsInfo = dnsResult.isResolving()
+                ? "Active Host (IPs: " + String.join(", ", dnsResult.ipAddresses()) + ")"
+                : "Non-resolving host (NXDOMAIN)";
+        threat.setDetails(dnsInfo + " | " + analysis.explanation());
 
         Threat saved = threatRepository.save(threat);
 
@@ -133,16 +176,27 @@ public class ThreatDetectionService {
             UUID brandId,
             ThreatStatus status,
             Severity severity,
+            boolean activeOnly,
             Pageable pageable) {
 
         getBrandForUser(userId, brandId);
 
-        if (status != null) {
-            return threatRepository.findByBrandIdAndStatus(brandId, status, pageable).map(this::mapToResponse);
-        } else if (severity != null) {
-            return threatRepository.findByBrandIdAndSeverity(brandId, severity, pageable).map(this::mapToResponse);
+        if (activeOnly) {
+            if (status != null) {
+                return threatRepository.findByBrandIdAndStatusAndIsLive(brandId, status, true, pageable).map(this::mapToResponse);
+            } else if (severity != null) {
+                return threatRepository.findByBrandIdAndSeverityAndIsLive(brandId, severity, true, pageable).map(this::mapToResponse);
+            } else {
+                return threatRepository.findByBrandIdAndIsLive(brandId, true, pageable).map(this::mapToResponse);
+            }
         } else {
-            return threatRepository.findByBrandId(brandId, pageable).map(this::mapToResponse);
+            if (status != null) {
+                return threatRepository.findByBrandIdAndStatus(brandId, status, pageable).map(this::mapToResponse);
+            } else if (severity != null) {
+                return threatRepository.findByBrandIdAndSeverity(brandId, severity, pageable).map(this::mapToResponse);
+            } else {
+                return threatRepository.findByBrandId(brandId, pageable).map(this::mapToResponse);
+            }
         }
     }
 
@@ -196,6 +250,20 @@ public class ThreatDetectionService {
         );
     }
 
+    /**
+     * Purges or removes non-resolving inactive threats for a brand.
+     */
+    @Transactional
+    public void purgeInactiveThreats(UUID userId, UUID brandId) {
+        getBrandForUser(userId, brandId);
+        List<Threat> list = threatRepository.findByBrandId(brandId, Pageable.unpaged()).getContent();
+        for (Threat t : list) {
+            if (!t.isLive()) {
+                threatRepository.delete(t);
+            }
+        }
+    }
+
     private Brand getBrandForUser(UUID userId, UUID brandId) {
         return brandRepository.findByIdAndUserId(brandId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Brand not found for this user"));
@@ -213,6 +281,7 @@ public class ThreatDetectionService {
                 threat.getSource(),
                 threat.getThreatScore(),
                 threat.getDetails(),
+                threat.isLive(),
                 threat.getDetectedAt(),
                 threat.getUpdatedAt()
         );

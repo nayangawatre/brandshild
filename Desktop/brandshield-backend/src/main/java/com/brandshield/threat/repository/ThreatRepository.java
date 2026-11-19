@@ -18,15 +18,25 @@ public interface ThreatRepository extends JpaRepository<Threat, UUID> {
 
     Page<Threat> findByBrandId(UUID brandId, Pageable pageable);
 
+    Page<Threat> findByBrandIdAndIsLive(UUID brandId, boolean isLive, Pageable pageable);
+
     Page<Threat> findByBrandIdAndStatus(UUID brandId, ThreatStatus status, Pageable pageable);
 
+    Page<Threat> findByBrandIdAndStatusAndIsLive(UUID brandId, ThreatStatus status, boolean isLive, Pageable pageable);
+
     Page<Threat> findByBrandIdAndSeverity(UUID brandId, Severity severity, Pageable pageable);
+
+    Page<Threat> findByBrandIdAndSeverityAndIsLive(UUID brandId, Severity severity, boolean isLive, Pageable pageable);
 
     Optional<Threat> findByIdAndBrandUserId(UUID id, UUID userId);
 
     boolean existsByBrandIdAndTargetValue(UUID brandId, String targetValue);
 
     long countByBrandId(UUID brandId);
+
+    long countByBrandIdAndIsLive(UUID brandId, boolean isLive);
+
+    long countByBrandIdAndSeverityAndIsLive(UUID brandId, Severity severity, boolean isLive);
 
     long countByBrandIdAndSeverity(UUID brandId, Severity severity);
 

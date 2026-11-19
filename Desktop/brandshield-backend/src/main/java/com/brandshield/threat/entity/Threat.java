@@ -44,6 +44,9 @@ public class Threat {
     @Column(columnDefinition = "TEXT")
     private String details;
 
+    @Column(name = "is_live", nullable = false)
+    private boolean isLive = true;
+
     @Column(name = "detected_at", nullable = false, updatable = false)
     private LocalDateTime detectedAt;
 
@@ -138,6 +141,18 @@ public class Threat {
 
     public void setDetails(String details) {
         this.details = details;
+    }
+
+    public boolean isLive() {
+        return isLive;
+    }
+
+    public void setLive(boolean live) {
+        isLive = live;
+    }
+
+    public void setIsLive(boolean isLive) {
+        this.isLive = isLive;
     }
 
     public LocalDateTime getDetectedAt() {
